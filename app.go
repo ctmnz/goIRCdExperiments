@@ -40,7 +40,7 @@ func (s *Server) MsgToChannel (channel *Channel, u *User, m string) {
 	fmt.Println("channel members: ", chmembers)
 
 	// send them the message
-	sm := ":"+uaddr+" PRIVMSG "+chname+" :"+chmsg+"\n"
+	sm := ":"+uaddr+" PRIVMSG "+chname+" "+chmsg+"\n"
 
 
 	for _, member := range chmembers {
@@ -167,7 +167,7 @@ func handleUserConnection(conn net.Conn, s *Server, initchannel *Channel) {
 
 	initchannel.AddMember(ircUser)
 
-	s.MsgToChannel(initchannel, ircUser, "New user logged in the network!")
+	// s.MsgToChannel(initchannel, ircUser, "New user logged in the network!")
 
 
 	for {
@@ -189,6 +189,9 @@ func handleUserConnection(conn net.Conn, s *Server, initchannel *Channel) {
 				if string(ucommand[1][0]) == "#" {
 					fmt.Println("PRIVMSG channel command: ",ucommand[1:])
 					fmt.Println("User channels: ", ircUser.channels)
+					umsg := strings.Join(ucommand[2:], " ")
+                                        fmt.Println("umsg: ", umsg)
+					s.MsgToChannel(initchannel, ircUser, umsg)
 				}
 			default:
 				ircUser.SendNotice("Command '"+  ucommand[0] + "' is not implemented")
