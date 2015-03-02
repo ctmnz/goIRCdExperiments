@@ -4,183 +4,241 @@ import (
 	"fmt"
 	"net"
 	"os"
-//	"strconv"
 	"strings"
 )
 
-
-// Server
 type Server struct {
-	name string
-	port uint
+	name     string
+	port     string
+	channels []*Channel
+	users	[]*User
 }
 
-// User
+func (s *Server) CreateChannel(channel *Channel) {
+	s.channels = append(s.channels, channel)
+}
+
+
+
+
+func (s *Server) MsgToChannel (channel *Channel, u *User, m string) {
+
+// ":daniel!daniel@/black/hole PRIVMSG #go :This is fake message\n"
+
+	// get the message
+	chmsg := m // TODO: parse illegal chars
+
+	// get sender user host address
+	uaddr := u.GetUserAddress()
+
+	// get channel name
+	chname := channel.GetChannelName()
+
+	// get channel members
+	chmembers := channel.GetChannelMembers()
+
+	fmt.Println("channel members: ", chmembers)
+
+	// send them the message
+	sm := ":"+uaddr+" PRIVMSG "+chname+" :"+chmsg+"\n"
+
+
+	for _, member := range chmembers {
+		member.Send([]byte(sm))
+	}
+
+}
+
+
+type Channel struct {
+	name    string
+	members []*User
+	topic   string
+}
+
+func (c *Channel) AddMember(u *User) {
+	c.members = append(c.members, u)
+}
+
+func (c *Channel) GetChannelName() string {
+	return c.name
+}
+
+func (c *Channel) GetChannelMembers() []*User {
+	return c.members
+}
+
 
 type User struct {
-	nick string
+	nick     string
 	username string
 	realname string
 	hostname string
-	server string
-	channels []string
+	channels []*Channel
+	server	*Server
 	userconn net.Conn
-	isIn bool
+	isIn     bool
 }
 
-func (u *User) SetNick (nick string) {
+func (u *User) SetNick(nick string) {
 	u.nick = nick
 }
 
-func (u *User) SetUsername (username string) {
+func (u *User) SetUsername(username string) {
 	u.username = username
 }
 
-func (u *User) SetRealname (realname string) {
+func (u *User) SetRealname(realname string) {
 	u.realname = realname
 }
 
-func (u *User) SetHostname (hostname string) {
+func (u *User) SetHostname(hostname string) {
 	u.hostname = hostname
+
 }
 
-func (u *User) SetServer (server string) {
+func (u *User) GetUserAddress() string {
+	// ":daniel!daniel@/black/hole PRIVMSG #go :This is fake message\n"
+	uaddress := u.nick + u.hostname
+	return uaddress
+}
+
+func (u *User) SetServer(server *Server) {
 	u.server = server
 }
 
-func (u *User) JoinChannel (channel string) {
-
+func (u *User) JoinChannel(channel string) {
+	joinmsg := ":" + u.nick + u.hostname + " JOIN " + channel + "\n"
+	u.Send([]byte(joinmsg))
+//	TODO: 
+//	u.channels = append(u.channels, channel)
 }
 
-func (u *User) Send (msg []byte) {
+func (u *User) Send(msg []byte) {
 	// u.userconn.Write([]byte(joinmsg))
 	u.userconn.Write(msg)
 }
 
 
 
+func (u *User) SendNotice(notice string) {
+	// :ctmnz!~ctmnz@bg.ibg.bg NOTICE ctmnz :test
+	nmsg :=":" + u.nick + u.hostname + " NOTICE " + u.nick + " :" + notice + "\n"
+	u.Send([]byte(nmsg))
+}
+
+
+//////////////////
+
 func main() {
-	ln, err := net.Listen("tcp", ":6667")
+
+	ircServer := Server{name: "pmp.ibg.bg", port: ":6667"}
+
+	initchannel := Channel{name: "#bulgaria", topic: "Welcome! :-)"}
+
+	ln, err := net.Listen("tcp", ircServer.port)
 	if err != nil {
-		fmt.Println("ERR! 1: ", err)
+		fmt.Println("Error: ", err)
 		os.Exit(1)
 	}
+
+// --->	initchannel := Channel{name:"#Bulgaria",topic:"Welcome to the channel #Bulgaria"}
+
+	// Server Connection loop
 
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			fmt.Println("ERR! 2")
+			fmt.Println("Error: ", err)
 			os.Exit(1)
 		}
-		go handleConnection(conn)
-
+		go handleUserConnection(conn, &ircServer, &initchannel)
 	}
+
 }
 
+func handleUserConnection(conn net.Conn, s *Server, initchannel *Channel) {
+	// initialize the user
+	ircUser := createUserFromConn(conn, s)
+	buf := make([]byte, 1024)
+	// User Connection Loop
+	uchan := make(chan string)
+	ucommand := []string{}
 
-func handleConnection(conn net.Conn) {
+	initchannel.AddMember(ircUser)
 
-	fmt.Println("Client connection handler!")
+	s.MsgToChannel(initchannel, ircUser, "New user logged in the network!")
 
+
+	for {
+
+		go func() {
+			ircUser.userconn.Read(buf)
+			uchan <- string(buf)
+		}()
+
+		//fmt.Println(<-uchan)
+		ucommand = parseUserCommand(<-uchan)
+		fmt.Println(ucommand[0])
+		switch {
+			case ucommand[0] == "QUIT":
+				// remove the user from all channels
+				conn.Close()
+				return
+			case ucommand[0] == "PRIVMSG":
+				if string(ucommand[1][0]) == "#" {
+					fmt.Println("PRIVMSG channel command: ",ucommand[1:])
+					fmt.Println("User channels: ", ircUser.channels)
+				}
+			default:
+				ircUser.SendNotice("Command '"+  ucommand[0] + "' is not implemented")
+		}
+
+
+
+
+
+	}
+
+	conn.Close()
+}
+
+func createUserFromConn(c net.Conn,s *Server) *User {
 	u := new(User)
-	u.userconn = conn
-
-	// userid
+	u.userconn = c
 	idbuf := make([]byte, 1024)
+
+	// Identify user loop
+
 	for {
 		//
-		if (u.isIn != true) {
+		if u.isIn != true {
 			u.userconn.Read(idbuf)
-			idcmd := HandleUserCommad(u, string(idbuf))
+			idcmd := parseUserCommand(string(idbuf))
 			if idcmd[0] == "NICK" {
 				usernick := strings.TrimSpace(idcmd[1])
 				username := strings.TrimSpace(idcmd[3])
-				userserver := strings.TrimSpace(idcmd[5])
-		//		usernick := idcmd[1]
-				//fmt.Println(idcmd)
+			//	userserver := strings.TrimSpace(idcmd[5])
 				u.SetNick(usernick)
-				u.SetServer(userserver)
+				u.SetServer(s)
 				u.SetUsername(username)
-				// Force channel join
-				joinmsg := ":" + u.nick + "!ufo@blackhole/from/space JOIN #go \n"
-				//fmt.Println(joinmsg)
-				//u.userconn.Write([]byte(joinmsg))
-				u.Send([]byte(joinmsg))
-
+				u.SetHostname("!ufo@blackhole/from/space")
+				u.JoinChannel("#bulgaria")
 				u.isIn = true
 				break
-		        }
+			}
 
 		}
 	}
 
+	// We have uer now
 
-	//conn.Write([]byte(":ctmnz!a@a.com JOIN #go \n"))
-
-	buf := make([]byte, 1024)
-
-	for {
-
-		_, err := conn.Read(buf)
-
-		if err != nil {
-			fmt.Println("error!: ", err.Error())
-		        return
-
-		}
-
-
-		ucmd := HandleUserCommad(u, string(buf))
-
-		fmt.Println("Message  from the user: ", ucmd)
-	}
-
-
-	conn.Close()
+	return u
 
 }
 
-func HandleUserCommad(u *User, cmd string) []string {
-	cmd = strings.Replace(cmd,"\n"," ",-1)
-	usercmd := strings.Split(cmd, " ")
-	fmt.Println("User command!: ",cmd)
-	//fmt.Println("User command received: ", usercmd)
-	if usercmd[0] == "NICK" {
-		fmt.Println("command NICK")
-	}
-
-	if usercmd[0] == "JOIN" {
-		fmt.Println("command JOIN")
-	}
-	// Experiments 
-	if usercmd[0] == "WHO" {
-		fmt.Println("command WHO")
-		channelmsg := ":" + u.server + " 332 " + u.nick + " #go :This channel topic! \n"
-                channelmsg2 := ":" + u.server + " 333 " + u.nick + " #go Daniel 1417218973 \n"
-                channelmsg3 := ":" + u.server + " 353 " + u.nick + " = #go :" + u.nick + " @FakeOper1 +FakeOper2 Fakeuser1 Fakeuser2 Fakeuser3 \n"
-                channelmsg4 := ":" + u.server + " 366 " + u.nick + " #go :End of /NAMES list.\n"
-                channelmsg5 := ":" + u.server + " 324 " + u.nick + " #go +cnt\n"
-                channelmsg6 := ":" + u.server + " 329 " + u.nick + " #go 1194785698\n"
-                channelmsg7 := ":daniel!daniel@/black/hole PRIVMSG #go :This is fake message\n"
-		channelmsg8 := ":FakeOper2!~freeformz@c-76-115-27-201.hsd1.or.comcast.net QUIT :Quit: My MacBook has gone to sleep. ZZZzzz… \n"
-		channelmsg9 := ":Daniel@Daniel!id@somewhere.on.the.earth JOIN #go\n"
-		channelmsg10 := ":ctmnz!a@a.com MODE #go +o ctmnz \n"
-		u.Send([]byte(channelmsg))
-                u.Send([]byte(channelmsg2))
-                u.Send([]byte(channelmsg3))
-                u.Send([]byte(channelmsg4))
-                u.Send([]byte(channelmsg5))
-                u.Send([]byte(channelmsg6))
-                u.Send([]byte(channelmsg7))
-		u.Send([]byte(channelmsg8))
-		u.Send([]byte(channelmsg9))
-		u.Send([]byte(channelmsg10))
-
-
-	}
-
+func parseUserCommand(c string) []string {
+	c = strings.Replace(c, "\n", " ", -1)
+	usercmd := strings.Split(c, " ")
 	return usercmd
 }
-
-
-
